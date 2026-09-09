@@ -1,0 +1,12 @@
+services:
+  dashboard:
+    build: .
+    container_name: project-dashboard
+    ports:
+      - "8330:8000"
+    volumes:
+      - dashboard_data:/data
+    restart: unless-stopped
+
+volumes:
+  dashboard_data:
