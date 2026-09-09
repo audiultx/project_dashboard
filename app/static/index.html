@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Project Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📋</text></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1>Project Dashboard</h1>
+      <button id="btn-new" class="btn btn-primary">+ New Project</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Stats strip -->
+    <section id="stats" class="stats" aria-label="Status counts"></section>
+
+    <!-- Filters -->
+    <section class="filters" aria-label="Filters">
+      <select id="filter-status" class="input">
+        <option value="">All statuses</option>
+        <option value="idea">Idea</option>
+        <option value="planning">Planning</option>
+        <option value="in_progress">In progress</option>
+        <option value="paused">Paused</option>
+        <option value="done">Done</option>
+      </select>
+      <input id="filter-category" class="input" type="text" placeholder="Category (exact)" />
+      <input id="filter-search" class="input input-grow" type="search" placeholder="Search title, description, tags…" />
+      <button id="btn-clear-filters" class="btn btn-ghost" type="button">Clear</button>
+    </section>
+
+    <!-- Project list -->
+    <section id="project-list" class="project-list" aria-live="polite"></section>
+    <p id="empty-state" class="empty hidden">No projects match. Create one with “+ New Project”.</p>
+  </main>
+
+  <!-- Detail modal -->
+  <div id="detail-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <h2 id="detail-title"></h2>
+        <button class="btn btn-ghost btn-icon" data-close="detail-modal" aria-label="Close">✕</button>
+      </div>
+      <div id="detail-body" class="detail-body"></div>
+      <div class="modal-actions">
+        <button id="btn-detail-edit" class="btn">Edit</button>
+        <button id="btn-detail-delete" class="btn btn-danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create / edit modal -->
+  <div id="form-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="form-title">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="form-title">New Project</h2>
+        <button class="btn btn-ghost btn-icon" data-close="form-modal" aria-label="Close">✕</button>
+      </div>
+      <form id="project-form" novalidate>
+        <input type="hidden" id="f-id" />
+        <label class="field">
+          <span>Title <em>*</em></span>
+          <input id="f-title" class="input" type="text" maxlength="200" required />
+        </label>
+        <label class="field">
+          <span>Description / plan</span>
+          <textarea id="f-description" class="input" rows="6" placeholder="Free-text plan, notes, links…"></textarea>
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>Category</span>
+            <input id="f-category" class="input" type="text" list="category-options" placeholder="e.g. Local AI" />
+            <datalist id="category-options"></datalist>
+          </label>
+          <label class="field">
+            <span>Status</span>
+            <select id="f-status" class="input">
+              <option value="idea">Idea</option>
+              <option value="planning">Planning</option>
+              <option value="in_progress">In progress</option>
+              <option value="paused">Paused</option>
+              <option value="done">Done</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Priority</span>
+            <select id="f-priority" class="input">
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span>Tags</span>
+          <input id="f-tags" class="input" type="text" placeholder="comma, separated, tags" />
+        </label>
+        <p id="form-error" class="form-error hidden"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" data-close="form-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
