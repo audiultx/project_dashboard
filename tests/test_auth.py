@@ -2,10 +2,11 @@
 
 import os
 import sqlite3
+import threading
 
 from fastapi.testclient import TestClient
 
-from app import auth, db
+from app import auth, crud, db
 from app.main import app
 
 
@@ -34,6 +35,86 @@ def test_register_blank_username_rejected(client):
 def test_username_stored_lowercase(client):
     client.post("/api/auth/register", json={"username": "MiXeD", "password": "password-123"})
     assert client.get("/api/auth/me").json()["username"] == "mixed"
+
+
+def test_concurrent_first_registrations_yield_single_admin(client):
+    """Racers with different usernames all pass the zero-user policy check, so
+    the atomic count+insert in create_first_or_regular_user is what must let
+    exactly one of them become the bootstrap admin."""
+    n = 4
+    barrier = threading.Barrier(n)
+    outcomes: list = [None] * n
+    errors: list[Exception] = []
+
+    def worker(i):
+        try:
+            barrier.wait()
+            outcomes[i] = crud.create_first_or_regular_user(
+                f"racer{i}", auth.hash_password("password-123")
+            )
+        except Exception as exc:  # pragma: no cover
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors
+    assert sum(was for _, was in outcomes) == 1
+    winner = next(u for u, was in outcomes if was)
+    assert winner["is_admin"]
+    assert all(not u["is_admin"] for u, was in outcomes if not was)
+
+
+# ---------------------------------------------------------------- register via API token (Bearer)
+
+def _mint_token(client, name="ci"):
+    res = client.post("/api/auth/tokens", json={"name": name})
+    assert res.status_code == 201, res.text
+    return res.json()["token"]
+
+
+def test_admin_bearer_token_can_register(client):
+    client.post("/api/auth/register", json={"username": "admin", "password": "password-123"})
+    token = _mint_token(client)
+    anon = TestClient(app)
+    res = anon.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password-123"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 201
+    assert res.json()["username"] == "bob"
+    assert res.json()["is_admin"] is False
+    # the admin's own identity/session is unchanged, and the new user did not
+    # steal the caller's cookie (admin-created accounts don't auto-login)
+    assert client.get("/api/auth/me").json()["username"] == "admin"
+    assert auth.SESSION_COOKIE not in anon.cookies
+
+
+def test_non_admin_bearer_token_cannot_register(admin_client, user_client):
+    token = _mint_token(user_client, name="alice-ci")
+    anon = TestClient(app)
+    res = anon.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password-123"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 403
+
+
+def test_invalid_bearer_does_not_fall_back_to_cookie(admin_client):
+    # A Bearer header, once present, is the only credential considered: even
+    # with a valid admin session cookie on the same request, an invalid token
+    # must be rejected rather than silently authorized by the cookie.
+    res = admin_client.post(
+        "/api/auth/register",
+        json={"username": "bob", "password": "password-123"},
+        headers={"Authorization": "Bearer pdt_invalid"},
+    )
+    assert res.status_code == 401
 
 
 # ---------------------------------------------------------------- signup gating

@@ -224,6 +224,20 @@ def authenticate_bearer(token: str) -> dict | None:
 
 # ---------------------------------------------------------------- FastAPI dependency
 
+def resolve_optional_user(request: Request) -> dict | None:
+    """Resolve the caller's credentials to a user row, or None when anonymous.
+
+    The Bearer header is exclusive: when present it is the only credential
+    considered, so an invalid Bearer yields None rather than falling back to
+    the session cookie. Otherwise the signed session cookie is consulted.
+    """
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        return authenticate_bearer(header[7:].strip())
+    user_id = decode_session(request.cookies.get(SESSION_COOKIE))
+    return crud.get_user(user_id) if user_id is not None else None
+
+
 def get_current_user(request: Request) -> dict:
     """Return the authenticated user's row, or raise 401.
 
@@ -231,14 +245,7 @@ def get_current_user(request: Request) -> dict:
     or the signed session cookie (browser). The Bearer header, when present,
     takes precedence and is the only credential considered.
     """
-    header = request.headers.get("authorization", "")
-    if header.lower().startswith("bearer "):
-        user = authenticate_bearer(header[7:].strip())
-        if user is not None:
-            return user
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    user_id = decode_session(request.cookies.get(SESSION_COOKIE))
-    user = crud.get_user(user_id) if user_id is not None else None
+    user = resolve_optional_user(request)
     if user is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return user

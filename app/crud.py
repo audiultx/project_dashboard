@@ -41,6 +41,32 @@ def create_user(username: str, password_hash: str, display_name: str = "", is_ad
     return _row_to_dict(row)
 
 
+def create_first_or_regular_user(
+    username: str, password_hash: str, display_name: str = ""
+) -> tuple[dict[str, Any], bool]:
+    """Create a user, atomically deciding whether this is the bootstrap (first) user.
+
+    The bootstrap decision is made solely by the in-transaction user count:
+    ``count == 0`` (no users exist yet) makes this user the admin, everyone
+    else is created as a regular user. The count and the INSERT run inside a
+    single IMMEDIATE transaction, so concurrent first-registrations serialize:
+    the loser blocks, then sees a non-zero count and is created as a regular
+    user. The UNIQUE username constraint cannot arbitrate this race because the
+    racers use different usernames. Returns ``(user_row, was_bootstrap)``.
+    """
+    with db.get_connection() as conn:
+        # BEGIN IMMEDIATE takes the write lock up front; a concurrent first
+        # registration blocks here until this transaction commits.
+        conn.execute("BEGIN IMMEDIATE")
+        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO users (username, password_hash, display_name, is_admin) VALUES (?, ?, ?, ?)",
+            (username, password_hash, display_name, int(count == 0)),
+        )
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return _row_to_dict(row), count == 0
+
+
 def get_user(user_id: int) -> dict[str, Any] | None:
     with db.get_connection() as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()

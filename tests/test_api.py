@@ -113,6 +113,13 @@ def test_delete(admin_client, sample_project):
     assert admin_client.get("/api/projects").json() == []
 
 
+def test_delete_missing_project_404(admin_client, sample_project):
+    pid = sample_project["id"]
+    assert admin_client.delete(f"/api/projects/{pid}").status_code == 204
+    # deleting again (already gone) is a 404, not a silent 204
+    assert admin_client.delete(f"/api/projects/{pid}").status_code == 404
+
+
 # ---------------------------------------------------------------- ownership (403)
 
 def test_owner_can_update_and_delete(admin_client, user_client):

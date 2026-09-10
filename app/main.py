@@ -85,10 +85,11 @@ def register(payload: UserCreate, request: Request, response: Response):
     # Signup policy: open only while zero users exist (first user becomes admin);
     # afterwards admin-only, unless DASHBOARD_ENABLE_SIGNUP=1 reopens it.
     is_bootstrap = crud.count_users() == 0
-    # Is the caller already authenticated? An admin creating an account for
-    # someone else must keep their own session (see the cookie note below).
-    caller_id = auth.decode_session(request.cookies.get(auth.SESSION_COOKIE))
-    caller = crud.get_user(caller_id) if caller_id is not None else None
+    # Is the caller already authenticated (session cookie or Bearer token)? The
+    # caller is optional here — bootstrap signup is anonymous — but an admin
+    # creating an account for someone else must keep their own session
+    # (see the cookie note below).
+    caller = auth.resolve_optional_user(request)
     if not is_bootstrap and not _signup_open():
         if caller is None:
             raise HTTPException(status_code=401, detail="Not authenticated")
@@ -98,19 +99,20 @@ def register(payload: UserCreate, request: Request, response: Response):
     if crud.get_user_by_username(payload.username) is not None:
         raise HTTPException(status_code=409, detail="Username is already taken")
 
-    is_admin = is_bootstrap
     try:
-        new_user = crud.create_user(
+        # The bootstrap decision (first user becomes admin) is made atomically
+        # inside the insert transaction, so concurrent first-registrations
+        # cannot both win.
+        new_user, won_bootstrap = crud.create_first_or_regular_user(
             username=payload.username,
             password_hash=auth.hash_password(payload.password),
             display_name=payload.display_name.strip(),
-            is_admin=is_admin,
         )
     except sqlite3.IntegrityError:
         # Lost the race against a concurrent register for the same username; the
         # UNIQUE constraint is the real arbiter (the check above is a fast path).
         raise HTTPException(status_code=409, detail="Username is already taken")
-    if is_bootstrap:
+    if won_bootstrap:
         # One-time migration: existing (pre-multi-user) projects become owned by
         # the first user, who is the bootstrap admin.
         crud.backfill_project_owners(new_user["id"])
@@ -252,7 +254,9 @@ def delete_project(project_id: int, user: dict = Depends(auth.get_current_user))
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     _assert_can_write(user, project)
-    crud.delete_project(project_id)
+    if not crud.delete_project(project_id):
+        # Raced a concurrent delete between the fetch above and the DELETE.
+        raise HTTPException(status_code=404, detail="Project not found")
 
 
 @app.get("/api/stats")
