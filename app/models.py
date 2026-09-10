@@ -141,6 +141,38 @@ class UserOut(BaseModel):
     created_at: str
 
 
+# ---------------------------------------------------------------- meta schemas
+
+class HealthOut(BaseModel):
+    """Response for GET /api/health."""
+
+    status: str
+
+
+class AuthConfigOut(BaseModel):
+    """Response for GET /api/auth/config."""
+
+    bootstrap: bool
+    signup_open: bool
+
+
+class StatsOut(BaseModel):
+    """Counts per status (zero-filled) plus per-owner counts."""
+
+    idea: int
+    planning: int
+    in_progress: int
+    paused: int
+    done: int
+    by_owner: dict[str, int]
+
+
+class ErrorOut(BaseModel):
+    """Error body returned by HTTPException (FastAPI's default)."""
+
+    detail: str
+
+
 # ---------------------------------------------------------------- token schemas
 
 def _validate_token_name(v: str) -> str:
