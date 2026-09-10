@@ -1,0 +1,34 @@
+{
+  // F5 debug configurations. Requires the Python + debugpy extensions
+  // (see extensions.json). The interpreter is pinned in settings.json.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Dashboard: uvicorn (reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "app.main:app",
+        "--reload",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8335"
+      ],
+      "envFile": "${workspaceFolder}/.env",
+      "cwd": "${workspaceFolder}",
+      "jinja": true,
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Dashboard: pytest (current file)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-v"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ]
+}

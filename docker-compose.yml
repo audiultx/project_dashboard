@@ -6,6 +6,12 @@ services:
       - "8330:8000"
     volumes:
       - dashboard_data:/data
+    environment:
+      # Required for stable session cookies across restarts. Generate one with:
+      #   python -c "import secrets; print(secrets.token_hex(32))"
+      DASHBOARD_SECRET: ${DASHBOARD_SECRET:?Set DASHBOARD_SECRET in the environment or a .env file}
+      # Uncomment to allow open self-service signup (default: admin-only after the first user):
+      # DASHBOARD_ENABLE_SIGNUP: "1"
     restart: unless-stopped
 
 volumes:

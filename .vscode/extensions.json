@@ -1,0 +1,7 @@
+{
+  // Prompted on first open of a fresh clone.
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.debugpy"
+  ]
+}

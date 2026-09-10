@@ -179,4 +179,5 @@ pyrightconfig.json
 # Project specific stuff
 docs/
 
+.opencode/opencode-swarm.json
 # End of https://www.toptal.com/developers/gitignore/api/python
