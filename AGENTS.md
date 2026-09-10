@@ -59,7 +59,11 @@ than reformatting files wholesale.
 ## API surface
 
 All API routes are prefixed `/api`; the static frontend is mounted at `/`.
-FastAPI auto-serves `/docs`, `/redoc`, and `/openapi.json`.
+FastAPI auto-serves `/docs` and `/openapi.json`; `/redoc` is a **custom route**
+in `main.py` (registered with `redoc_url=None`) that serves a self-hosted
+ReDoc page using the vendored `app/static/redoc.standalone.js` (pinned 2.5.4).
+It must stay registered **before** the static mount, and `redoc_url=None` +
+the vendored JS must ship in the same change or `/redoc` will 404/shadow.
 
 **Auth:** every route below requires **either** a session cookie **or**
 `Authorization: Bearer <api-token>` **except** `/api/health`,
