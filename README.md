@@ -56,12 +56,21 @@ Requires Python 3.12+.
 
 ```bash
 pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --host 127.0.0.1 --port 8335
 ```
+
+Then open <http://localhost:8335>.
 
 The database is created at `data/dashboard.db` on first start
 (override with the `DASHBOARD_DB` environment variable). Set
 `DASHBOARD_SECRET` for stable sessions across restarts.
+
+### In VS Code
+
+Open the folder and press <kbd>F5</kbd> ("Dashboard: uvicorn (reload)") to
+run with the debugger attached on port 8335. The `.vscode/` configs pin the
+`.venv` interpreter, load `DASHBOARD_SECRET` from `.env`, and enable pytest in
+the Test Explorer. Install the recommended extensions when prompted.
 
 ## Tests
 
