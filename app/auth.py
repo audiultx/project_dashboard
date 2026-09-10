@@ -196,13 +196,13 @@ def reset_login_rate_limits() -> None:
 # a Bearer header is present the session cookie is ignored.
 
 def _token_is_active(row: dict) -> bool:
-    """Active = not revoked and (no expiry, or expiry in the future, UTC)."""
+    """Active = not revoked and (no expiry, or expiry strictly in the future, UTC)."""
     if row["revoked_at"] is not None:
         return False
     expires_at = row["expires_at"]
     if expires_at is not None:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        if expires_at < now:
+        if expires_at <= now:
             return False
     return True
 

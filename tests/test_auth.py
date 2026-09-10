@@ -6,6 +6,8 @@ import threading
 
 from fastapi.testclient import TestClient
 
+import pytest
+
 from app import auth, crud, db
 from app.main import app
 
@@ -66,6 +68,56 @@ def test_concurrent_first_registrations_yield_single_admin(client):
     winner = next(u for u, was in outcomes if was)
     assert winner["is_admin"]
     assert all(not u["is_admin"] for u, was in outcomes if not was)
+
+
+def test_create_first_or_regular_user_rejects_when_closed(client):
+    """With users already present, allow_regular=False must raise without inserting."""
+    crud.create_first_or_regular_user("first", auth.hash_password("password-123"))
+    with pytest.raises(crud.SignupClosedError):
+        crud.create_first_or_regular_user(
+            "second", auth.hash_password("password-123"), allow_regular=False
+        )
+    assert crud.get_user_by_username("second") is None
+
+
+def test_concurrent_anonymous_first_registrations_only_one_succeeds(client):
+    """Two anonymous signups racing on an empty DB: the winner becomes the
+    bootstrap admin (201), the loser is rejected with 401 because the
+    in-transaction count shows signup already closed."""
+    n = 2
+    barrier = threading.Barrier(n)
+    outcomes: list = [None] * n
+
+    def worker(i):
+        anon = TestClient(app)
+        try:
+            barrier.wait()
+            outcomes[i] = anon.post(
+                "/api/auth/register",
+                json={"username": f"racer{i}", "password": "password-123"},
+            ).status_code
+        except Exception as exc:  # pragma: no cover
+            outcomes[i] = exc
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not any(isinstance(o, Exception) for o in outcomes), outcomes
+    assert sorted(outcomes) == [201, 401], outcomes
+    # exactly one account exists, and it is the admin
+    winners = []
+    for i in range(n):
+        c = TestClient(app)
+        res = c.post(
+            "/api/auth/login",
+            json={"username": f"racer{i}", "password": "password-123"},
+        )
+        if res.status_code == 200:
+            winners.append(res.json()["is_admin"])
+    assert winners == [True]
 
 
 # ---------------------------------------------------------------- register via API token (Bearer)

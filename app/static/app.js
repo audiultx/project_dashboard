@@ -80,6 +80,9 @@ async function showAuthView() {
   $("#auth-view").classList.remove("hidden");
   $("#login-form").classList.remove("hidden");
   $("#register-form").classList.add("hidden");
+  // Clear leftover input from a previous session so a typed password is not left in the DOM
+  $("#login-form").reset();
+  $("#register-form").reset();
   $("#login-error").classList.add("hidden");
   $("#register-error").classList.add("hidden");
   // Decide whether to offer a register link.

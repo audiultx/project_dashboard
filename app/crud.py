@@ -41,24 +41,41 @@ def create_user(username: str, password_hash: str, display_name: str = "", is_ad
     return _row_to_dict(row)
 
 
+class SignupClosedError(Exception):
+    """Raised when signup is no longer allowed at insert time.
+
+    The caller passed allow_regular=False, but the in-transaction user count
+    was already non-zero (e.g. a concurrent bootstrap committed while this
+    request waited on the write lock). The route layer maps this to 401 for
+    anonymous callers and 403 for authenticated non-admins.
+    """
+
+
 def create_first_or_regular_user(
-    username: str, password_hash: str, display_name: str = ""
+    username: str,
+    password_hash: str,
+    display_name: str = "",
+    allow_regular: bool = True,
 ) -> tuple[dict[str, Any], bool]:
     """Create a user, atomically deciding whether this is the bootstrap (first) user.
 
     The bootstrap decision is made solely by the in-transaction user count:
-    ``count == 0`` (no users exist yet) makes this user the admin, everyone
-    else is created as a regular user. The count and the INSERT run inside a
-    single IMMEDIATE transaction, so concurrent first-registrations serialize:
-    the loser blocks, then sees a non-zero count and is created as a regular
-    user. The UNIQUE username constraint cannot arbitrate this race because the
-    racers use different usernames. Returns ``(user_row, was_bootstrap)``.
+    ``count == 0`` (no users exist yet) makes this user the admin. When the
+    count is already non-zero, a regular user is created only if
+    ``allow_regular`` is True; otherwise :class:`SignupClosedError` is raised
+    and no row is inserted. The count and the INSERT run inside a single
+    IMMEDIATE transaction, so concurrent first-registrations serialize: the
+    loser blocks, then sees the count the winner left behind. The UNIQUE
+    username constraint cannot arbitrate this race because the racers use
+    different usernames. Returns ``(user_row, was_bootstrap)``.
     """
     with db.get_connection() as conn:
         # BEGIN IMMEDIATE takes the write lock up front; a concurrent first
         # registration blocks here until this transaction commits.
         conn.execute("BEGIN IMMEDIATE")
         count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        if count > 0 and not allow_regular:
+            raise SignupClosedError()
         cur = conn.execute(
             "INSERT INTO users (username, password_hash, display_name, is_admin) VALUES (?, ?, ?, ?)",
             (username, password_hash, display_name, int(count == 0)),

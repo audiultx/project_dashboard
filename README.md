@@ -37,8 +37,11 @@ SQLite file).
 
 ```bash
 docker build -t project-dashboard .
+# 1) Generate a random signing secret (do not use a known value — anyone who knows it can forge session cookies):
+python -c "import secrets; print(secrets.token_hex(32))"
+# 2) Run with the generated value:
 docker run -d --name project-dashboard \
-  -p 8000:8000 -e DASHBOARD_SECRET=change-me -v dashboard_data:/data project-dashboard
+  -p 8000:8000 -e DASHBOARD_SECRET=<paste-the-generated-secret> -v dashboard_data:/data project-dashboard
 ```
 
 ### Environment variables

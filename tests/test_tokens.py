@@ -190,6 +190,19 @@ def test_expired_token_401(admin_client):
     assert listing[0]["expires_at"] == "2000-01-01 00:00:00"
 
 
+def test_token_expiring_this_second_is_expired(admin_client):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    data = _mint(admin_client, name="boundary", expires_at=now.isoformat())
+    anon = TestClient(app)
+    # expires_at equal to the current second is already expired (<= boundary)
+    assert anon.get("/api/projects", headers=_bearer(data["token"])).status_code == 401
+
+    soon = _mint(admin_client, name="soon", expires_at=(now + timedelta(seconds=5)).isoformat())
+    assert anon.get("/api/projects", headers=_bearer(soon["token"])).status_code == 200
+
+
 def test_future_expiry_kept(admin_client):
     from datetime import datetime, timedelta, timezone
 

@@ -84,30 +84,38 @@ def auth_config() -> dict[str, bool]:
 def register(payload: UserCreate, request: Request, response: Response):
     # Signup policy: open only while zero users exist (first user becomes admin);
     # afterwards admin-only, unless DASHBOARD_ENABLE_SIGNUP=1 reopens it.
-    is_bootstrap = crud.count_users() == 0
     # Is the caller already authenticated (session cookie or Bearer token)? The
     # caller is optional here — bootstrap signup is anonymous — but an admin
     # creating an account for someone else must keep their own session
     # (see the cookie note below).
     caller = auth.resolve_optional_user(request)
-    if not is_bootstrap and not _signup_open():
+    # allow_regular is the authoritative gate, re-checked atomically inside the
+    # insert transaction; the pre-check below is only a fast reject path.
+    allow_regular = _signup_open() or (caller is not None and caller["is_admin"])
+    if crud.count_users() > 0 and not allow_regular:
         if caller is None:
             raise HTTPException(status_code=401, detail="Not authenticated")
-        if not caller["is_admin"]:
-            raise HTTPException(status_code=403, detail="Only an admin can create accounts")
+        raise HTTPException(status_code=403, detail="Only an admin can create accounts")
 
     if crud.get_user_by_username(payload.username) is not None:
         raise HTTPException(status_code=409, detail="Username is already taken")
 
     try:
-        # The bootstrap decision (first user becomes admin) is made atomically
-        # inside the insert transaction, so concurrent first-registrations
-        # cannot both win.
+        # The bootstrap decision (first user becomes admin) and the signup-gate
+        # decision are both made atomically inside the insert transaction, so
+        # concurrent first-registrations cannot both win.
         new_user, won_bootstrap = crud.create_first_or_regular_user(
             username=payload.username,
             password_hash=auth.hash_password(payload.password),
             display_name=payload.display_name.strip(),
+            allow_regular=allow_regular,
         )
+    except crud.SignupClosedError:
+        # Passed the pre-check while the DB was still empty, but a concurrent
+        # bootstrap committed while we waited on the write lock.
+        if caller is None:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        raise HTTPException(status_code=403, detail="Only an admin can create accounts")
     except sqlite3.IntegrityError:
         # Lost the race against a concurrent register for the same username; the
         # UNIQUE constraint is the real arbiter (the check above is a fast path).
