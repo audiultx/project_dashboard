@@ -11,6 +11,8 @@ const STATUS_LABELS = {
 };
 
 const state = {
+  me: null,
+  signup: { bootstrap: false, signup_open: false },
   projects: [],
   stats: {},
   filters: { status: "", category: "", q: "" },
@@ -39,16 +41,127 @@ async function api(path, options = {}) {
     ...options,
   });
   if (!res.ok) {
+    // Session expired / never logged in while the app view is up → back to login.
+    if (res.status === 401 && state.me) {
+      state.me = null;
+      showAuthView();
+    }
     let detail = res.statusText;
     try {
       const body = await res.json();
       if (typeof body.detail === "string") detail = body.detail;
       else if (Array.isArray(body.detail)) detail = body.detail.map((e) => e.msg).join("; ");
     } catch { /* non-JSON error body */ }
-    throw new Error(`${res.status}: ${detail}`);
+    const err = new Error(`${res.status}: ${detail}`);
+    err.status = res.status;
+    throw err;
   }
   if (res.status === 204) return null;
   return res.json();
+}
+
+// ---------------------------------------------------------------- auth / session
+
+function canManage(p) {
+  return !!state.me && (state.me.is_admin || p.owner_id === state.me.id);
+}
+
+async function showAuthView() {
+  // Tear down authenticated-session UI so nothing from the previous session
+  // lingers over the login screen. The modals are siblings of #app-main (not
+  // children), so hiding #app-main alone leaves an open modal painted on top.
+  document.querySelectorAll(".modal-backdrop:not(.hidden)").forEach((m) => m.classList.add("hidden"));
+  state.detailId = null;
+  state.projects = [];
+  $("#app-main").classList.add("hidden");
+  $("#user-chip").classList.add("hidden");
+  $("#btn-logout").classList.add("hidden");
+  $("#btn-new").classList.add("hidden");
+  $("#auth-view").classList.remove("hidden");
+  $("#login-form").classList.remove("hidden");
+  $("#register-form").classList.add("hidden");
+  $("#login-error").classList.add("hidden");
+  $("#register-error").classList.add("hidden");
+  // Decide whether to offer a register link.
+  let cfg = { bootstrap: false, signup_open: false };
+  try { cfg = await api("/api/auth/config"); } catch { /* stay on login */ }
+  state.signup = cfg;
+  const canRegister = cfg.bootstrap || cfg.signup_open;
+  const sw = $("#auth-switch");
+  if (canRegister) {
+    sw.classList.remove("hidden");
+    $("#auth-switch-text").textContent = cfg.bootstrap
+      ? "No account yet? The first account becomes admin."
+      : "No account?";
+    $("#auth-switch-link").textContent = "Create one";
+  } else {
+    sw.classList.add("hidden");
+  }
+  setTimeout(() => $("#login-username").focus(), 50);
+}
+
+function showAppView() {
+  $("#auth-view").classList.add("hidden");
+  $("#app-main").classList.remove("hidden");
+  const chip = $("#user-chip");
+  chip.textContent = `${state.me.display_name || state.me.username}${state.me.is_admin ? " · admin" : ""}`;
+  chip.classList.remove("hidden");
+  $("#btn-logout").classList.remove("hidden");
+  $("#btn-new").classList.remove("hidden");
+}
+
+async function submitLogin(e) {
+  e.preventDefault();
+  const errEl = $("#login-error");
+  errEl.classList.add("hidden");
+  try {
+    state.me = await api("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: $("#login-username").value.trim(),
+        password: $("#login-password").value,
+      }),
+    });
+    showAppView();
+    await loadAll();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove("hidden");
+  }
+}
+
+async function submitRegister(e) {
+  e.preventDefault();
+  const errEl = $("#register-error");
+  errEl.classList.add("hidden");
+  const password = $("#reg-password").value;
+  if (password.length < 8) {
+    errEl.textContent = "Password must be at least 8 characters.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  try {
+    // Register auto-logs-in (session cookie is set by the response).
+    state.me = await api("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({
+        username: $("#reg-username").value.trim(),
+        password,
+        display_name: $("#reg-display-name").value.trim(),
+      }),
+    });
+    showAppView();
+    await loadAll();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove("hidden");
+  }
+}
+
+async function logout() {
+  try { await api("/api/auth/logout", { method: "POST" }); } catch { /* best effort */ }
+  state.me = null;
+  showAuthView();
 }
 
 // ---------------------------------------------------------------- data
@@ -110,8 +223,9 @@ function renderList() {
         <span class="badge status-${p.status}"><span class="dot"></span>${STATUS_LABELS[p.status]}</span>
         <span class="badge prio-${p.priority}">${p.priority} priority</span>
         <span class="badge">${escapeHtml(p.category || "Other")}</span>
+        <span class="badge owner" title="Owner">@${escapeHtml(p.owner_username || "?")}</span>
         ${tagList(p.tags).length ? `<span class="pc-tags">${tagList(p.tags).map((t) => "#" + escapeHtml(t)).join(" ")}</span>` : ""}
-        <span class="pc-date">updated ${fmtDate(p.updated_at)}</span>
+        <span class="pc-date">updated ${fmtDate(p.updated_at)}${p.updated_by_username ? ` by @${escapeHtml(p.updated_by_username)}` : ""}</span>
       </div>
     </article>`).join("");
   list.querySelectorAll(".project-card").forEach((node) => {
@@ -140,10 +254,16 @@ function openDetail(id) {
       <span class="badge status-${p.status}"><span class="dot"></span>${STATUS_LABELS[p.status]}</span>
       <span class="badge prio-${p.priority}">${p.priority} priority</span>
       <span class="badge">${escapeHtml(p.category || "Other")}</span>
+      <span class="badge owner" title="Owner">@${escapeHtml(p.owner_username || "?")}</span>
       ${tags.map((t) => `<span class="badge">#${escapeHtml(t)}</span>`).join("")}
     </div>
     ${desc}
-    <div class="detail-dates">Created ${fmtDate(p.created_at)} · Updated ${fmtDate(p.updated_at)}</div>`;
+    <div class="detail-dates">Created ${fmtDate(p.created_at)} · Updated ${fmtDate(p.updated_at)}${p.updated_by_username ? ` by @${escapeHtml(p.updated_by_username)}` : ""}</div>`;
+  // Owner-gated writes: hide edit/delete for non-owner non-admins.
+  const writable = canManage(p);
+  $("#btn-detail-edit").style.display = writable ? "" : "none";
+  $("#btn-detail-delete").style.display = writable ? "" : "none";
+  $("#detail-readonly").classList.toggle("hidden", writable);
   openModal("detail-modal");
 }
 
@@ -230,6 +350,27 @@ function closeModal(id) {
 
 $("#btn-new").addEventListener("click", () => openForm());
 $("#project-form").addEventListener("submit", submitForm);
+$("#login-form").addEventListener("submit", submitLogin);
+$("#register-form").addEventListener("submit", submitRegister);
+$("#btn-logout").addEventListener("click", logout);
+$("#auth-switch-link").addEventListener("click", (e) => {
+  e.preventDefault();
+  const reg = $("#register-form");
+  const showRegister = reg.classList.contains("hidden"); // toggle
+  $("#login-form").classList.toggle("hidden", showRegister);
+  reg.classList.toggle("hidden", !showRegister);
+  if (showRegister) {
+    $("#auth-switch-text").textContent = "Already have an account?";
+    $("#auth-switch-link").textContent = "Sign in";
+    $("#reg-username").focus();
+  } else {
+    $("#auth-switch-text").textContent = state.signup.bootstrap
+      ? "No account yet? The first account becomes admin."
+      : "No account?";
+    $("#auth-switch-link").textContent = "Create one";
+    $("#login-username").focus();
+  }
+});
 $("#btn-detail-edit").addEventListener("click", () => {
   const p = state.projects.find((x) => x.id === state.detailId);
   if (!p) return;
@@ -282,6 +423,22 @@ $("#btn-clear-filters").addEventListener("click", () => {
 
 // ---------------------------------------------------------------- init
 
-loadAll().catch((err) => {
-  $("#project-list").innerHTML = `<p class="empty">Failed to load: ${escapeHtml(err.message)}</p>`;
-});
+async function init() {
+  // Check for an existing session; fall back to the login screen on 401.
+  try {
+    state.me = await api("/api/auth/me");
+  } catch (err) {
+    if (err.status === 401) {
+      showAuthView();
+      return;
+    }
+    $("#project-list").innerHTML = `<p class="empty">Failed to load: ${escapeHtml(err.message)}</p>`;
+    return;
+  }
+  showAppView();
+  loadAll().catch((err) => {
+    $("#project-list").innerHTML = `<p class="empty">Failed to load: ${escapeHtml(err.message)}</p>`;
+  });
+}
+
+init();
