@@ -11,11 +11,54 @@
   <header class="topbar">
     <div class="topbar-inner">
       <h1>Project Dashboard</h1>
-      <button id="btn-new" class="btn btn-primary">+ New Project</button>
+      <div class="topbar-right">
+        <span id="user-chip" class="user-chip hidden"></span>
+        <button id="btn-logout" class="btn btn-ghost hidden" type="button">Log out</button>
+        <button id="btn-new" class="btn btn-primary hidden" type="button">+ New Project</button>
+      </div>
     </div>
   </header>
 
-  <main class="container">
+  <!-- Auth view (shown when unauthenticated) -->
+  <div id="auth-view" class="auth-view hidden">
+    <div class="auth-card">
+      <h1>📋 Project Dashboard</h1>
+      <form id="login-form" novalidate>
+        <label class="field">
+          <span>Username</span>
+          <input id="login-username" class="input" type="text" autocomplete="username" required />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input id="login-password" class="input" type="password" autocomplete="current-password" required />
+        </label>
+        <p id="login-error" class="form-error hidden"></p>
+        <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+      </form>
+      <form id="register-form" class="hidden" novalidate>
+        <label class="field">
+          <span>Username</span>
+          <input id="reg-username" class="input" type="text" autocomplete="username" maxlength="32" required />
+        </label>
+        <label class="field">
+          <span>Password <em>*</em></span>
+          <input id="reg-password" class="input" type="password" autocomplete="new-password" minlength="8" required />
+        </label>
+        <label class="field">
+          <span>Display name</span>
+          <input id="reg-display-name" class="input" type="text" autocomplete="name" maxlength="64" />
+        </label>
+        <p id="register-error" class="form-error hidden"></p>
+        <button type="submit" class="btn btn-primary btn-block">Create account</button>
+      </form>
+      <div id="auth-switch" class="auth-switch hidden">
+        <span id="auth-switch-text"></span>
+        <a href="#" id="auth-switch-link"></a>
+      </div>
+    </div>
+  </div>
+
+  <main id="app-main" class="container">
     <!-- Stats strip -->
     <section id="stats" class="stats" aria-label="Status counts"></section>
 
@@ -48,6 +91,7 @@
       </div>
       <div id="detail-body" class="detail-body"></div>
       <div class="modal-actions">
+        <span id="detail-readonly" class="detail-readonly hidden">Read-only — only the owner or an admin can modify this project.</span>
         <button id="btn-detail-edit" class="btn">Edit</button>
         <button id="btn-detail-delete" class="btn btn-danger">Delete</button>
       </div>
