@@ -1,0 +1,12 @@
+{
+  // Pin the workspace interpreter to the project venv so the Run and Test
+  // panels use the same Python as the terminal. Path is Windows-style; on
+  // macOS/Linux this is .venv/bin/python (VS Code tolerates the mismatch by
+  // falling back to interpreter discovery if the exact path is absent).
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+
+  // Test Explorer: enable pytest discovery so tests get inline run/debug gutters.
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": ["tests"]
+}
