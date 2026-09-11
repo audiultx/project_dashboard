@@ -112,9 +112,10 @@ owner or an admin (403 otherwise).
 Interactive docs: Swagger UI at <http://localhost:8000/docs> and self-hosted
 ReDoc at <http://localhost:8000/redoc>. The ReDoc page is fully offline — it
 serves the vendored `app/static/redoc.standalone.js` (pinned at **2.5.4**) and
-the local `/openapi.json`. To upgrade ReDoc, re-download the pinned bundle from
-`https://unpkg.com/redoc@<version>/bundles/redoc.standalone.js` into
-`app/static/redoc.standalone.js` and bump the version noted here.
+the local `/openapi.json`. To upgrade ReDoc, re-download the pinned bundle and
+its license from `https://unpkg.com/redoc@<version>/bundles/redoc.standalone.js`
+(and `redoc.standalone.js.LICENSE.txt`) into `app/static/` and bump the version
+noted here.
 
 ## Project structure
 
