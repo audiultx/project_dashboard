@@ -103,3 +103,12 @@ def test_openapi_components_include_new_schemas(client):
     names = set(schema.get("components", {}).get("schemas", {}))
     for expected in ("HealthOut", "AuthConfigOut", "StatsOut", "ErrorOut"):
         assert expected in names, f"missing schema {expected}"
+
+
+def test_statsout_covers_all_statuses():
+    # StatsOut is the /api/stats response_model, so any status added to STATUSES
+    # must also be a StatsOut field or it is silently dropped from the response.
+    from app.models import STATUSES, StatsOut
+
+    missing = set(STATUSES) - set(StatsOut.model_fields)
+    assert not missing, f"StatsOut is missing status fields: {missing}"
