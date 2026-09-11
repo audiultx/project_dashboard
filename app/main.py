@@ -7,16 +7,21 @@ import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import auth, crud, db
 from .models import (
     PRIORITIES,
     STATUSES,
+    AuthConfigOut,
+    ErrorOut,
+    HealthOut,
     Login,
     ProjectCreate,
     ProjectOut,
     ProjectUpdate,
+    StatsOut,
     TokenCreate,
     TokenCreateOut,
     TokenOut,
@@ -61,26 +66,122 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Project Dashboard", version="1.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="Project Dashboard",
+    version="1.1.0",
+    description="""Self-hosted project-idea tracker.
+
+All API routes (except `/api/health`, `/api/auth/login`, `/api/auth/register`,
+and `/api/auth/config`) require authentication with either a signed session
+cookie or `Authorization: Bearer <api-token>`; when both are present, the
+Bearer token takes precedence and the cookie is ignored.
+
+API tokens are minted at `POST /api/auth/tokens`; the `pdt_...` plaintext is
+returned exactly once and only its SHA-256 hash is stored. The first user to
+register becomes an admin; afterwards registration is admin-only unless
+`DASHBOARD_ENABLE_SIGNUP=1` is set.
+
+The interactive docs are self-hosted: Swagger UI at `/docs` and ReDoc at
+`/redoc` (the ReDoc bundle is served locally from `/redoc.standalone.js`, so
+the docs work fully offline).""",
+    openapi_tags=[
+        {
+            "name": "auth",
+            "description": "Registration, login, logout, and the current-user endpoint.",
+        },
+        {
+            "name": "tokens",
+            "description": "Personal API tokens for non-browser clients (curl, Postman, CI).",
+        },
+        {
+            "name": "projects",
+            "description": "Project CRUD plus per-status and per-owner statistics.",
+        },
+        {
+            "name": "meta",
+            "description": "Service metadata: the public health check.",
+        },
+    ],
+    redoc_url=None,
+    lifespan=lifespan,
+)
+
+
+# ---------------------------------------------------------------- docs routes
+# Self-hosted ReDoc: the vendored bundle is served by the static mount below
+# and the spec by FastAPI's /openapi.json, so the page needs no CDN access.
+
+REDOC_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Project Dashboard — API Reference</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+</head>
+<body>
+  <redoc spec-url="/openapi.json"
+         style="background: white; position: absolute; top: 0; bottom: 0; left: 0; right: 0;"></redoc>
+  <script src="/redoc.standalone.js"></script>
+</body>
+</html>"""
+
+
+@app.get("/redoc", include_in_schema=False)
+def redoc_docs() -> HTMLResponse:
+    """Self-hosted ReDoc; both the bundle and the spec are served locally."""
+    return HTMLResponse(REDOC_HTML)
 
 
 # ---------------------------------------------------------------- API routes
 
-@app.get("/api/health")
+@app.get(
+    "/api/health",
+    tags=["meta"],
+    summary="Health check",
+    response_model=HealthOut,
+)
 def health() -> dict[str, str]:
+    """Public liveness probe; returns {"status": "ok"}."""
     return {"status": "ok"}
 
 
 # ---------------------------------------------------------------- auth routes
 
-@app.get("/api/auth/config")
+@app.get(
+    "/api/auth/config",
+    tags=["auth"],
+    summary="Auth configuration for the login screen",
+    description=(
+        "Public (unauthenticated) flags for the login screen. "
+        "`bootstrap` = no users exist yet (the first user becomes admin); "
+        "`signup_open` = whether non-admin self-signup is allowed."
+    ),
+    response_model=AuthConfigOut,
+)
 def auth_config() -> dict[str, bool]:
     """Public (unauthenticated) flag for the login screen: whether a register
     link should be shown. bootstrap = no users yet (first user becomes admin)."""
     return {"bootstrap": crud.count_users() == 0, "signup_open": _signup_open()}
 
 
-@app.post("/api/auth/register", response_model=UserOut, status_code=201)
+@app.post(
+    "/api/auth/register",
+    response_model=UserOut,
+    status_code=201,
+    tags=["auth"],
+    summary="Register a new account",
+    description=(
+        "Create a new user. Open only while zero users exist (the first user "
+        "becomes admin); afterwards admin-only unless DASHBOARD_ENABLE_SIGNUP=1. "
+        "Auto-logs the new user in with a session cookie (unless called by an "
+        "authenticated admin on behalf of someone else)."
+    ),
+    responses={
+        "401": {"model": ErrorOut, "description": "Not authenticated while signup is closed"},
+        "403": {"model": ErrorOut, "description": "Only an admin can create accounts"},
+        "409": {"model": ErrorOut, "description": "Username is already taken"},
+    },
+)
 def register(payload: UserCreate, request: Request, response: Response):
     # Signup policy: open only while zero users exist (first user becomes admin);
     # afterwards admin-only, unless DASHBOARD_ENABLE_SIGNUP=1 reopens it.
@@ -131,7 +232,17 @@ def register(payload: UserCreate, request: Request, response: Response):
     return _user_out(new_user)
 
 
-@app.post("/api/auth/login", response_model=UserOut)
+@app.post(
+    "/api/auth/login",
+    response_model=UserOut,
+    tags=["auth"],
+    summary="Log in",
+    description="Exchanges valid credentials for a signed session cookie and returns the user.",
+    responses={
+        "401": {"model": ErrorOut, "description": "Invalid username or password"},
+        "429": {"model": ErrorOut, "description": "Too many failed login attempts"},
+    },
+)
 def login(payload: Login, request: Request, response: Response) -> dict:
     username = payload.username
     if auth._login_rate_limited(username):
@@ -146,12 +257,26 @@ def login(payload: Login, request: Request, response: Response) -> dict:
     return _user_out(user)
 
 
-@app.post("/api/auth/logout", status_code=204)
+@app.post(
+    "/api/auth/logout",
+    status_code=204,
+    tags=["auth"],
+    summary="Log out",
+    description="Clears the session cookie. Note: the cookie is stateless, so other issued cookies are not revoked.",
+    responses={"401": {"model": ErrorOut, "description": "Not authenticated"}},
+)
 def logout(request: Request, response: Response, user: dict = Depends(auth.get_current_user)) -> None:
     response.delete_cookie(auth.SESSION_COOKIE, samesite="lax", secure=request.url.scheme == "https")
 
 
-@app.get("/api/auth/me", response_model=UserOut)
+@app.get(
+    "/api/auth/me",
+    response_model=UserOut,
+    tags=["auth"],
+    summary="Current user",
+    description="Returns the authenticated user (never the password hash).",
+    responses={"401": {"model": ErrorOut, "description": "Not authenticated"}},
+)
 def me(user: dict = Depends(auth.get_current_user)) -> dict:
     return _user_out(user)
 
@@ -176,14 +301,37 @@ def _token_out(row: dict) -> dict:
     }
 
 
-@app.post("/api/auth/tokens", response_model=TokenCreateOut, status_code=201)
+@app.post(
+    "/api/auth/tokens",
+    response_model=TokenCreateOut,
+    status_code=201,
+    tags=["tokens"],
+    summary="Create a personal API token",
+    description=(
+        "Mint a `pdt_...` token that authenticates as the calling user. The "
+        "plaintext is returned in this response exactly once; only the SHA-256 "
+        "hash is stored. Optionally set `expires_at` (ISO-8601; past dates "
+        "authenticate as 401)."
+    ),
+    responses={"401": {"model": ErrorOut, "description": "Not authenticated"}},
+)
 def create_api_token(payload: TokenCreate, user: dict = Depends(auth.get_current_user)) -> dict:
     """Mint a token for the calling user; returns the plaintext exactly once."""
     token, row = crud.create_token(user["id"], payload.name, payload.expires_at)
     return {**_token_out(row), "token": token}
 
 
-@app.get("/api/auth/tokens", response_model=list[TokenOut])
+@app.get(
+    "/api/auth/tokens",
+    response_model=list[TokenOut],
+    tags=["tokens"],
+    summary="List API tokens",
+    description="The caller's own tokens (metadata only). Pass `?all=1` as an admin to list every user's tokens.",
+    responses={
+        "401": {"model": ErrorOut, "description": "Not authenticated"},
+        "403": {"model": ErrorOut, "description": "Only an admin can list all tokens"},
+    },
+)
 def list_api_tokens(
     list_all: bool = Query(False, alias="all", description="Admin only: list every user's tokens"),
     user: dict = Depends(auth.get_current_user),
@@ -198,7 +346,18 @@ def list_api_tokens(
     return [_token_out(r) for r in rows]
 
 
-@app.delete("/api/auth/tokens/{token_id}", status_code=204)
+@app.delete(
+    "/api/auth/tokens/{token_id}",
+    status_code=204,
+    tags=["tokens"],
+    summary="Revoke an API token",
+    description="Revoke the token (sets `revoked_at`). Owner or admin only; 404 is raised before the ownership 403.",
+    responses={
+        "401": {"model": ErrorOut, "description": "Not authenticated"},
+        "404": {"model": ErrorOut, "description": "Token not found or already revoked"},
+        "403": {"model": ErrorOut, "description": "Only the token owner or an admin can revoke this token"},
+    },
+)
 def revoke_api_token(token_id: int, user: dict = Depends(auth.get_current_user)) -> None:
     """Revoke a token: owner or admin (404-then-403 ordering, like projects)."""
     token = crud.get_token(token_id)
@@ -217,7 +376,17 @@ def _assert_can_write(user: dict, project: dict) -> None:
         raise HTTPException(status_code=403, detail="Only the project owner or an admin can modify this project")
 
 
-@app.get("/api/projects", response_model=list[ProjectOut])
+@app.get(
+    "/api/projects",
+    response_model=list[ProjectOut],
+    tags=["projects"],
+    summary="List projects",
+    description="All projects (everyone sees all), with optional `status`, `category` (exact), and `q` (text search) filters.",
+    responses={
+        "401": {"model": ErrorOut, "description": "Not authenticated"},
+        "400": {"model": ErrorOut, "description": "Invalid status filter value"},
+    },
+)
 def list_projects(
     status: str | None = Query(None),
     category: str | None = Query(None),
@@ -229,13 +398,31 @@ def list_projects(
     return crud.list_projects(status=status, category=category, q=q)
 
 
-@app.post("/api/projects", response_model=ProjectOut, status_code=201)
+@app.post(
+    "/api/projects",
+    response_model=ProjectOut,
+    status_code=201,
+    tags=["projects"],
+    summary="Create a project",
+    description="Creates a project owned by the calling user (`owner_id` is server-managed, never client-set).",
+    responses={"401": {"model": ErrorOut, "description": "Not authenticated"}},
+)
 def create_project(payload: ProjectCreate, user: dict = Depends(auth.get_current_user)) -> dict:
     # owner_id is server-managed: it is always the current user, never the client.
     return crud.create_project(payload.model_dump(), owner_id=user["id"])
 
 
-@app.get("/api/projects/{project_id}", response_model=ProjectOut)
+@app.get(
+    "/api/projects/{project_id}",
+    response_model=ProjectOut,
+    tags=["projects"],
+    summary="Get a project",
+    description="Returns one project, including `owner_id`/`owner_username` and `updated_by` metadata.",
+    responses={
+        "401": {"model": ErrorOut, "description": "Not authenticated"},
+        "404": {"model": ErrorOut, "description": "Project not found"},
+    },
+)
 def get_project(project_id: int, user: dict = Depends(auth.get_current_user)) -> dict:
     project = crud.get_project(project_id)
     if project is None:
@@ -243,7 +430,21 @@ def get_project(project_id: int, user: dict = Depends(auth.get_current_user)) ->
     return project
 
 
-@app.put("/api/projects/{project_id}", response_model=ProjectOut)
+@app.put(
+    "/api/projects/{project_id}",
+    response_model=ProjectOut,
+    tags=["projects"],
+    summary="Update a project",
+    description=(
+        "Partial update (only fields present in the body are changed). Owner or "
+        "admin only; 404 is raised before the ownership 403."
+    ),
+    responses={
+        "401": {"model": ErrorOut, "description": "Not authenticated"},
+        "404": {"model": ErrorOut, "description": "Project not found"},
+        "403": {"model": ErrorOut, "description": "Only the project owner or an admin can modify this project"},
+    },
+)
 def update_project(project_id: int, payload: ProjectUpdate, user: dict = Depends(auth.get_current_user)) -> dict:
     project = crud.get_project(project_id)
     if project is None:
@@ -256,7 +457,18 @@ def update_project(project_id: int, payload: ProjectUpdate, user: dict = Depends
     return updated
 
 
-@app.delete("/api/projects/{project_id}", status_code=204)
+@app.delete(
+    "/api/projects/{project_id}",
+    status_code=204,
+    tags=["projects"],
+    summary="Delete a project",
+    description="Deletes the project. Owner or admin only; 404 is raised before the ownership 403.",
+    responses={
+        "401": {"model": ErrorOut, "description": "Not authenticated"},
+        "404": {"model": ErrorOut, "description": "Project not found"},
+        "403": {"model": ErrorOut, "description": "Only the project owner or an admin can modify this project"},
+    },
+)
 def delete_project(project_id: int, user: dict = Depends(auth.get_current_user)) -> None:
     project = crud.get_project(project_id)
     if project is None:
@@ -267,7 +479,14 @@ def delete_project(project_id: int, user: dict = Depends(auth.get_current_user))
         raise HTTPException(status_code=404, detail="Project not found")
 
 
-@app.get("/api/stats")
+@app.get(
+    "/api/stats",
+    tags=["projects"],
+    summary="Project statistics",
+    description="Count per status (zero-filled) plus per-owner counts keyed by username under `by_owner`.",
+    response_model=StatsOut,
+    responses={"401": {"model": ErrorOut, "description": "Not authenticated"}},
+)
 def stats(user: dict = Depends(auth.get_current_user)) -> dict:
     return crud.stats()
 
