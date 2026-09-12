@@ -15,6 +15,7 @@ const state = {
   signup: { bootstrap: false, signup_open: false },
   projects: [],
   stats: {},
+  tokens: [],
   filters: { status: "", category: "", q: "" },
   detailId: null,
 };
@@ -31,7 +32,9 @@ function escapeHtml(s) {
 
 function fmtDate(iso) {
   if (!iso) return "";
-  const d = new Date(iso + "Z"); // SQLite datetime('now') is UTC
+  // SQLite stores 'YYYY-MM-DD HH:MM:SS' (UTC); normalize the space to 'T' so
+  // every browser parses it as ISO 8601.
+  const d = new Date(iso.replace(" ", "T") + "Z");
   return isNaN(d) ? iso : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
@@ -73,9 +76,13 @@ async function showAuthView() {
   document.querySelectorAll(".modal-backdrop:not(.hidden)").forEach((m) => m.classList.add("hidden"));
   state.detailId = null;
   state.projects = [];
+  // In admin sessions this holds every user's token metadata — drop it on logout.
+  state.tokens = [];
+  clearTokenCallout();
   $("#app-main").classList.add("hidden");
   $("#user-chip").classList.add("hidden");
   $("#btn-logout").classList.add("hidden");
+  $("#btn-tokens").classList.add("hidden");
   $("#btn-new").classList.add("hidden");
   $("#auth-view").classList.remove("hidden");
   $("#login-form").classList.remove("hidden");
@@ -110,6 +117,7 @@ function showAppView() {
   chip.textContent = `${state.me.display_name || state.me.username}${state.me.is_admin ? " · admin" : ""}`;
   chip.classList.remove("hidden");
   $("#btn-logout").classList.remove("hidden");
+  $("#btn-tokens").classList.remove("hidden");
   $("#btn-new").classList.remove("hidden");
 }
 
@@ -340,6 +348,139 @@ async function confirmDelete(id) {
   }
 }
 
+// ---------------------------------------------------------------- API tokens
+
+async function openTokens() {
+  $("#token-form").reset();
+  $("#token-error").classList.add("hidden");
+  clearTokenCallout();
+  const adminRow = $("#token-admin-row");
+  adminRow.classList.toggle("hidden", !state.me.is_admin);
+  $("#token-admin-toggle").checked = false;
+  // Clear rows/errors from a previous open so nothing (including other users'
+  // tokens with live Revoke buttons for an admin) flashes until the fetch resolves.
+  $("#token-list").innerHTML = "";
+  openModal("tokens-modal");
+  setTimeout(() => $("#t-name").focus(), 50);
+  await loadTokens();
+}
+
+async function loadTokens() {
+  try {
+    const all = $("#token-admin-toggle").checked;
+    state.tokens = await api(`/api/auth/tokens${all ? "?all=1" : ""}`);
+    renderTokens(all);
+  } catch (err) {
+    $("#token-list").innerHTML = `<p class="empty token-list-empty">Failed to load: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderTokens(showOwner) {
+  const list = $("#token-list");
+  if (!state.tokens.length) {
+    list.innerHTML = `<p class="empty token-list-empty">No API tokens yet.</p>`;
+    return;
+  }
+  list.innerHTML = state.tokens.map((t) => `
+    <div class="token-row${t.revoked_at ? " revoked" : ""}">
+      <div class="token-info">
+        <span class="token-name">${escapeHtml(t.name)}</span>
+        ${t.revoked_at ? `<span class="badge badge-revoked">Revoked</span>` : ""}
+        ${showOwner ? `<span class="badge owner" title="Owner">@${escapeHtml(t.owner_username || "?")}</span>` : ""}
+      </div>
+      ${t.revoked_at ? "" : `<button class="btn btn-danger btn-sm" data-revoke="${t.id}" type="button">Revoke</button>`}
+      <div class="token-meta">created ${fmtDate(t.created_at)} · last used ${t.last_used_at ? fmtDate(t.last_used_at) : "never"} · expires ${t.expires_at ? fmtDate(t.expires_at) : "never"}</div>
+    </div>`).join("");
+  list.querySelectorAll("[data-revoke]").forEach((btn) => {
+    btn.addEventListener("click", () => revokeToken(Number(btn.dataset.revoke)));
+  });
+}
+
+async function submitTokenForm(e) {
+  e.preventDefault();
+  const errEl = $("#token-error");
+  errEl.classList.add("hidden");
+  const name = $("#t-name").value.trim();
+  const expires = $("#t-expires").value;
+  if (!name) {
+    errEl.textContent = "Name is required.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  // Guard against a double-submit minting a second token whose plaintext is lost:
+  // the button stays disabled for the whole in-flight POST.
+  const submitBtn = $("#token-form button[type=submit]");
+  submitBtn.disabled = true;
+  try {
+    const res = await api("/api/auth/tokens", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        // A bare date means end-of-day UTC, so a "today" pick doesn't expire immediately.
+        expires_at: expires ? `${expires}T23:59:59` : null,
+      }),
+    });
+    // The plaintext is shown exactly once — kept only in the callout, never in state.
+    $("#token-plaintext").textContent = res.token;
+    $("#token-callout").classList.remove("hidden");
+    $("#token-form").reset();
+    await loadTokens();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove("hidden");
+  } finally {
+    submitBtn.disabled = false;
+  }
+}
+
+async function copyToken() {
+  const text = $("#token-plaintext").textContent;
+  const btn = $("#btn-copy-token");
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // Self-hosted plain-HTTP fallback where the Clipboard API is unavailable.
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      let ok = false;
+      try {
+        ta.select();
+        ok = document.execCommand("copy");
+      } finally {
+        // Always remove the plaintext-bearing textarea, even if copy throws.
+        ta.remove();
+      }
+      if (!ok) throw new Error("copy command failed");
+    }
+    btn.textContent = "Copied!";
+  } catch {
+    btn.textContent = "Copy failed";
+  }
+  setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+}
+
+async function revokeToken(id) {
+  const t = state.tokens.find((x) => x.id === id);
+  if (!t) return;
+  if (!confirm(`Revoke “${t.name}”? Clients using it will stop working.`)) return;
+  try {
+    await api(`/api/auth/tokens/${id}`, { method: "DELETE" });
+    await loadTokens();
+  } catch (err) {
+    if (err.status === 404) await loadTokens(); // already revoked
+    else alert(`Revoke failed: ${err.message}`);
+  }
+}
+
+function clearTokenCallout() {
+  $("#token-callout").classList.add("hidden");
+  $("#token-plaintext").textContent = "";
+}
+
 // ---------------------------------------------------------------- modals
 
 function openModal(id) {
@@ -347,6 +488,7 @@ function openModal(id) {
 }
 function closeModal(id) {
   document.getElementById(id).classList.add("hidden");
+  if (id === "tokens-modal") clearTokenCallout();
 }
 
 // ---------------------------------------------------------------- wiring
@@ -356,6 +498,10 @@ $("#project-form").addEventListener("submit", submitForm);
 $("#login-form").addEventListener("submit", submitLogin);
 $("#register-form").addEventListener("submit", submitRegister);
 $("#btn-logout").addEventListener("click", logout);
+$("#btn-tokens").addEventListener("click", openTokens);
+$("#token-form").addEventListener("submit", submitTokenForm);
+$("#btn-copy-token").addEventListener("click", copyToken);
+$("#token-admin-toggle").addEventListener("change", loadTokens);
 $("#auth-switch-link").addEventListener("click", (e) => {
   e.preventDefault();
   const reg = $("#register-form");
@@ -387,12 +533,12 @@ document.querySelectorAll("[data-close]").forEach((btn) => {
 });
 document.querySelectorAll(".modal-backdrop").forEach((backdrop) => {
   backdrop.addEventListener("mousedown", (e) => {
-    if (e.target === backdrop) backdrop.classList.add("hidden");
+    if (e.target === backdrop) closeModal(backdrop.id);
   });
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    document.querySelectorAll(".modal-backdrop:not(.hidden)").forEach((m) => m.classList.add("hidden"));
+    document.querySelectorAll(".modal-backdrop:not(.hidden)").forEach((m) => closeModal(m.id));
   }
 });
 
