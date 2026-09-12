@@ -350,6 +350,14 @@ async function confirmDelete(id) {
 
 // ---------------------------------------------------------------- API tokens
 
+// True only while the create-token POST is in flight. The one-time plaintext is
+// about to land in the callout, so closing the modal here would hide it
+// unreadably; closeModal() refuses to close tokens-modal while this is set.
+let tokenCreateInFlight = false;
+// Monotonic counter so a slow token-list fetch can't overwrite newer state
+// after a rapid admin-toggle/reopen: only the latest fetch renders.
+let tokenFetchSeq = 0;
+
 async function openTokens() {
   $("#token-form").reset();
   $("#token-error").classList.add("hidden");
@@ -366,11 +374,15 @@ async function openTokens() {
 }
 
 async function loadTokens() {
+  const seq = ++tokenFetchSeq;
   try {
     const all = $("#token-admin-toggle").checked;
-    state.tokens = await api(`/api/auth/tokens${all ? "?all=1" : ""}`);
+    const tokens = await api(`/api/auth/tokens${all ? "?all=1" : ""}`);
+    if (seq !== tokenFetchSeq) return; // a newer fetch started; ignore this one
+    state.tokens = tokens;
     renderTokens(all);
   } catch (err) {
+    if (seq !== tokenFetchSeq) return;
     $("#token-list").innerHTML = `<p class="empty token-list-empty">Failed to load: ${escapeHtml(err.message)}</p>`;
   }
 }
@@ -411,6 +423,7 @@ async function submitTokenForm(e) {
   // the button stays disabled for the whole in-flight POST.
   const submitBtn = $("#token-form button[type=submit]");
   submitBtn.disabled = true;
+  tokenCreateInFlight = true;
   try {
     const res = await api("/api/auth/tokens", {
       method: "POST",
@@ -430,6 +443,7 @@ async function submitTokenForm(e) {
     errEl.classList.remove("hidden");
   } finally {
     submitBtn.disabled = false;
+    tokenCreateInFlight = false;
   }
 }
 
@@ -487,6 +501,11 @@ function openModal(id) {
   document.getElementById(id).classList.remove("hidden");
 }
 function closeModal(id) {
+  // Refuse to close mid-mint: the one-time plaintext is about to render in the
+  // callout, and hiding the modal now would make it permanently unreadable (the
+  // token exists server-side but can never be shown again). The close paths go
+  // live again the moment the POST settles.
+  if (id === "tokens-modal" && tokenCreateInFlight) return;
   document.getElementById(id).classList.add("hidden");
   if (id === "tokens-modal") clearTokenCallout();
 }
