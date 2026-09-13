@@ -429,6 +429,10 @@ async function submitTokenForm(e) {
   const submitBtn = $("#token-form button[type=submit]");
   submitBtn.disabled = true;
   tokenCreateInFlight = true;
+  // A hung POST must not leave the guard and disabled button latched forever:
+  // abort after 30s so the catch/finally path below can unblock everything.
+  const ac = new AbortController();
+  const timeoutId = setTimeout(() => ac.abort(), 30000);
   try {
     const res = await api("/api/auth/tokens", {
       method: "POST",
@@ -437,6 +441,7 @@ async function submitTokenForm(e) {
         // A bare date means end-of-day UTC, so a "today" pick doesn't expire immediately.
         expires_at: expires ? `${expires}T23:59:59` : null,
       }),
+      signal: ac.signal,
     });
     // The plaintext is shown exactly once — kept only in the callout, never in state.
     $("#token-plaintext").textContent = res.token;
@@ -448,9 +453,12 @@ async function submitTokenForm(e) {
     tokenCreateInFlight = false;
     await loadTokens();
   } catch (err) {
-    errEl.textContent = err.message;
+    // Aborted fetches reject, so the timeout path lands here too; real server
+    // errors keep their own message because signal.aborted is only set by the timeout.
+    errEl.textContent = ac.signal.aborted ? "Request timed out — please try again." : err.message;
     errEl.classList.remove("hidden");
   } finally {
+    clearTimeout(timeoutId);
     submitBtn.disabled = false;
     tokenCreateInFlight = false;
   }
