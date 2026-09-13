@@ -73,7 +73,12 @@ async function showAuthView() {
   // Tear down authenticated-session UI so nothing from the previous session
   // lingers over the login screen. The modals are siblings of #app-main (not
   // children), so hiding #app-main alone leaves an open modal painted on top.
-  document.querySelectorAll(".modal-backdrop:not(.hidden)").forEach((m) => m.classList.add("hidden"));
+  document.querySelectorAll(".modal-backdrop:not(.hidden)").forEach((m) => {
+    // Mid-mint: the one-time plaintext is about to render into the tokens
+    // modal — hiding it now would make the token permanently unreadable.
+    if (m.id === "tokens-modal" && tokenCreateInFlight) return;
+    m.classList.add("hidden");
+  });
   state.detailId = null;
   state.projects = [];
   // In admin sessions this holds every user's token metadata — drop it on logout.
@@ -437,6 +442,10 @@ async function submitTokenForm(e) {
     $("#token-plaintext").textContent = res.token;
     $("#token-callout").classList.remove("hidden");
     $("#token-form").reset();
+    // The one-time plaintext is readable now — release the modal-close guard
+    // before the (non-critical) list refresh, so a slow/hung GET can't trap
+    // the user in an uncloseable modal.
+    tokenCreateInFlight = false;
     await loadTokens();
   } catch (err) {
     errEl.textContent = err.message;
