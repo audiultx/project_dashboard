@@ -73,7 +73,15 @@ async function showAuthView() {
   // Tear down authenticated-session UI so nothing from the previous session
   // lingers over the login screen. The modals are siblings of #app-main (not
   // children), so hiding #app-main alone leaves an open modal painted on top.
-  document.querySelectorAll(".modal-backdrop:not(.hidden)").forEach((m) => m.classList.add("hidden"));
+  // No mid-mint carve-out here: the only reachable teardown while a mint is
+  // in flight is the mint POST itself coming back 401 (the backdrop blocks
+  // logout), and in that path the plaintext is never rendered, so there is
+  // nothing to protect. Skipping the hide would strand the modal — with the
+  // previous session's token rows — over the login screen. The plaintext
+  // guard lives in closeModal(), where the close affordances actually are.
+  document.querySelectorAll(".modal-backdrop:not(.hidden)").forEach((m) => {
+    m.classList.add("hidden");
+  });
   state.detailId = null;
   state.projects = [];
   // In admin sessions this holds every user's token metadata — drop it on logout.
@@ -350,6 +358,14 @@ async function confirmDelete(id) {
 
 // ---------------------------------------------------------------- API tokens
 
+// True only while the create-token POST is in flight. The one-time plaintext is
+// about to land in the callout, so closing the modal here would hide it
+// unreadably; closeModal() refuses to close tokens-modal while this is set.
+let tokenCreateInFlight = false;
+// Monotonic counter so a slow token-list fetch can't overwrite newer state
+// after a rapid admin-toggle/reopen: only the latest fetch renders.
+let tokenFetchSeq = 0;
+
 async function openTokens() {
   $("#token-form").reset();
   $("#token-error").classList.add("hidden");
@@ -366,11 +382,15 @@ async function openTokens() {
 }
 
 async function loadTokens() {
+  const seq = ++tokenFetchSeq;
   try {
     const all = $("#token-admin-toggle").checked;
-    state.tokens = await api(`/api/auth/tokens${all ? "?all=1" : ""}`);
+    const tokens = await api(`/api/auth/tokens${all ? "?all=1" : ""}`);
+    if (seq !== tokenFetchSeq) return; // a newer fetch started; ignore this one
+    state.tokens = tokens;
     renderTokens(all);
   } catch (err) {
+    if (seq !== tokenFetchSeq) return;
     $("#token-list").innerHTML = `<p class="empty token-list-empty">Failed to load: ${escapeHtml(err.message)}</p>`;
   }
 }
@@ -411,6 +431,11 @@ async function submitTokenForm(e) {
   // the button stays disabled for the whole in-flight POST.
   const submitBtn = $("#token-form button[type=submit]");
   submitBtn.disabled = true;
+  tokenCreateInFlight = true;
+  // A hung POST must not leave the guard and disabled button latched forever:
+  // abort after 30s so the catch/finally path below can unblock everything.
+  const ac = new AbortController();
+  const timeoutId = setTimeout(() => ac.abort(), 30000);
   try {
     const res = await api("/api/auth/tokens", {
       method: "POST",
@@ -419,17 +444,26 @@ async function submitTokenForm(e) {
         // A bare date means end-of-day UTC, so a "today" pick doesn't expire immediately.
         expires_at: expires ? `${expires}T23:59:59` : null,
       }),
+      signal: ac.signal,
     });
     // The plaintext is shown exactly once — kept only in the callout, never in state.
     $("#token-plaintext").textContent = res.token;
     $("#token-callout").classList.remove("hidden");
     $("#token-form").reset();
+    // The one-time plaintext is readable now — release the modal-close guard
+    // before the (non-critical) list refresh, so a slow/hung GET can't trap
+    // the user in an uncloseable modal.
+    tokenCreateInFlight = false;
     await loadTokens();
   } catch (err) {
-    errEl.textContent = err.message;
+    // Aborted fetches reject, so the timeout path lands here too; real server
+    // errors keep their own message because signal.aborted is only set by the timeout.
+    errEl.textContent = ac.signal.aborted ? "Request timed out — please try again." : err.message;
     errEl.classList.remove("hidden");
   } finally {
+    clearTimeout(timeoutId);
     submitBtn.disabled = false;
+    tokenCreateInFlight = false;
   }
 }
 
@@ -487,6 +521,11 @@ function openModal(id) {
   document.getElementById(id).classList.remove("hidden");
 }
 function closeModal(id) {
+  // Refuse to close mid-mint: the one-time plaintext is about to render in the
+  // callout, and hiding the modal now would make it permanently unreadable (the
+  // token exists server-side but can never be shown again). The close paths go
+  // live again the moment the POST settles.
+  if (id === "tokens-modal" && tokenCreateInFlight) return;
   document.getElementById(id).classList.add("hidden");
   if (id === "tokens-modal") clearTokenCallout();
 }
