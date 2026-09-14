@@ -150,3 +150,8 @@ Everything is one SQLite file. Back it up with:
 ```bash
 docker cp project-dashboard:/data/dashboard.db ./dashboard-backup.db
 ```
+
+## License
+
+This project is licensed under the Apache License, Version 2.0 — see
+the [LICENSE](LICENSE) file.
