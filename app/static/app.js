@@ -73,10 +73,13 @@ async function showAuthView() {
   // Tear down authenticated-session UI so nothing from the previous session
   // lingers over the login screen. The modals are siblings of #app-main (not
   // children), so hiding #app-main alone leaves an open modal painted on top.
+  // No mid-mint carve-out here: the only reachable teardown while a mint is
+  // in flight is the mint POST itself coming back 401 (the backdrop blocks
+  // logout), and in that path the plaintext is never rendered, so there is
+  // nothing to protect. Skipping the hide would strand the modal — with the
+  // previous session's token rows — over the login screen. The plaintext
+  // guard lives in closeModal(), where the close affordances actually are.
   document.querySelectorAll(".modal-backdrop:not(.hidden)").forEach((m) => {
-    // Mid-mint: the one-time plaintext is about to render into the tokens
-    // modal — hiding it now would make the token permanently unreadable.
-    if (m.id === "tokens-modal" && tokenCreateInFlight) return;
     m.classList.add("hidden");
   });
   state.detailId = null;
