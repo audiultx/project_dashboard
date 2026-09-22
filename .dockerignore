@@ -7,6 +7,5 @@ __pycache__/
 data/
 tests/
 requirements-dev.txt
-PLAN.md
 README.md
 docker-compose.yml
