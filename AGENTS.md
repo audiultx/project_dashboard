@@ -56,6 +56,17 @@ docker compose up -d --build                      # host 8330 -> container 8000
 There is no linter/formatter config committed. Match the existing style rather
 than reformatting files wholesale.
 
+## Contribution workflow
+
+- **Never commit or push directly to `main`.** All changes go on a feature
+  branch (e.g. `docs/short-topic`, `fix/short-topic`) and land via a pull
+  request.
+- Respect the repo's branch protection: a PR is required, and the
+  `Sourcery-ai` status check must pass before merging.
+- **Do not use admin bypass**, even when your account has the permission to
+  do so — going around the PR/status-check requirement defeats the point of
+  having it.
+
 ## API surface
 
 All API routes are prefixed `/api`; the static frontend is mounted at `/`.
