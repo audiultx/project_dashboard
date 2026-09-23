@@ -346,14 +346,18 @@ textarea.input { resize: vertical; min-height: 90px; }
      overflowing the viewport. The chip pins to the right of the title line
      (margin-left:auto); .topbar-actions then takes a full-width row of its own,
      landing the three ghost actions (API docs / API tokens / Log out) together
-     on one line with + New Project wrapping beneath. Items keep their label on
-     one line and never shrink, so nothing breaks mid-word and the chip stays a
-     pill rather than being compressed into a circle. */
+     on one line with + New Project wrapping beneath. The action buttons never
+     shrink and keep their label on one line, so nothing breaks mid-word. The
+     chip instead truncates with an ellipsis: a long user-set display name
+     (up to 64 chars) would otherwise blow past the viewport and re-create the
+     horizontal overflow this fix targets. The title keeps its size so only the
+     chip absorbs the shrink. */
   .topbar-inner { flex-wrap: wrap; gap: 10px; }
+  .topbar h1 { flex-shrink: 0; }
   .topbar-right { display: contents; }
-  .topbar-right > * { flex-shrink: 0; white-space: nowrap; }
-  .user-chip { margin-left: auto; }
+  .user-chip { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .topbar-actions { display: flex; flex-wrap: wrap; gap: 10px; flex-basis: 100%; }
+  .topbar-actions > * { flex-shrink: 0; white-space: nowrap; }
   /* Comfortable ~44px tap targets for the top-bar controls on touch screens. */
   .topbar-actions .btn { min-height: 44px; display: inline-flex; align-items: center; }
 }
